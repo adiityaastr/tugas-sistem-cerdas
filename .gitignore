@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+*.db
+*.pkl
+golden_cross_results.png
+golden_cross_results.
