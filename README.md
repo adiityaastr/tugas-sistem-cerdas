@@ -14,6 +14,57 @@ Proyek ini terdiri dari 2 use case: **Ingestion (ETL)** dan **Golden Cross Detec
 └── README.md
 ```
 
+---
+
+## Persyaratan
+
+### 1. Instalasi Python
+
+Pastikan Python 3.9+ sudah terinstall. Cek dengan:
+
+```bash
+python --version
+```
+
+### 2. Install Library
+
+```bash
+pip install pandas numpy matplotlib scikit-learn curl_cffi sqlalchemy cloudscraper
+```
+
+Atau install dari file requirements (jika disediakan):
+
+```bash
+pip install -r requirements.txt
+```
+
+### 3. Jalankan di Google Colab (Rekomendasi)
+
+1. Upload folder `ingestion/` dan `modeling/` ke Google Drive
+2. Buka file `.ipynb` di Google Colab
+3. Jalankan setiap cell secara berurutan dari atas ke bawah
+
+### 4. Jalankan di Jupyter Notebook (Lokal)
+
+```bash
+# Aktifkan virtual environment (opsional)
+python -m venv venv
+source venv/bin/activate      # Linux/Mac
+venv\Scripts\activate          # Windows
+
+# Install library
+pip install pandas numpy matplotlib scikit-learn curl_cffi sqlalchemy cloudscraper
+
+# Jalankan Jupyter
+jupyter notebook
+
+# Buka file notebook:
+# - ingestion/ingestion.ipynb
+# - modeling/golden_cross_modeling.ipynb
+```
+
+---
+
 ## Use Case 1: Ingestion (ETL Pipeline)
 
 ### Tujuan
@@ -30,21 +81,29 @@ Extract → Transform → Load
 2. **Transform** — Pembersihan data: konversi kolom numerik, hapus baris kosong, standardisasi string (strip, uppercase untuk kode saham).
 3. **Load** — Simpan ke database SQLite menggunakan SQLAlchemy ORM. Jika data tanggal tersebut sudah ada, hapus dulu lalu insert ulang (idempotent).
 
-### Library yang Digunakan
-| Library | Fungsi |
-|---------|--------|
-| `curl_cffi` | HTTP request dengan TLS fingerprint impersonation (bypass Cloudflare) |
-| `cloudscraper` | Fallback scraper jika curl_cffi gagal |
-| `pandas` | Manipulasi dan transformasi data |
-| `sqlalchemy` | ORM dan koneksi ke database SQLite |
+### Langkah Menjalankan
 
-### Cara Menjalankan
-1. Buka `ingestion/ingestion.ipynb` di Jupyter Notebook / Google Colab
-2. Jalankan setiap cell secara berurutan
-3. Hasil: file `idx_stock.db` (database SQLite) dengan tabel `stock_summary` berisi ~959 record
+1. Buka `ingestion/ingestion.ipynb`
+2. Jalankan **Cell 1** — Install library: `!pip install curl_cffi pandas sqlalchemy`
+3. Jalankan **Cell 2** — Import library
+4. Jalankan **Cell 3** — Konfigurasi (URL API, path database)
+5. Jalankan **Cell 4** — Definisi model database (SQLAlchemy ORM)
+6. Jalankan **Cell 5** — **Extract**: Scraping data dari IDX API. Jika muncul error 403, program akan otomatis retry dan fallback ke metode alternatif
+7. Jalankan **Cell 6** — **Transform**: Pembersihan data (lihat output DataFrame)
+8. Jalankan **Cell 7** — **Load**: Simpan ke SQLite database
+9. Jalankan **Cell 8** — Verifikasi: Query data dari database
+10. Jalankan **Cell 9** — Statistik deskriptif
+11. Jalankan **Cell 10** — Ekspor ke CSV (opsional)
 
-### Output
-Database SQLite (`idx_stock.db`) dengan tabel `stock_summary` yang memiliki kolom:
+### Output yang Diharapkan
+
+| Cell | Output |
+|------|--------|
+| Cell 5 (Extract) | `[EXTRACT] Berhasil mengambil 959 record (total: 959)` |
+| Cell 7 (Load) | `[LOAD] Berhasil menyimpan 959 record.` |
+| Cell 9 (CSV) | File `idx_stock_summary.csv` |
+
+### Tabel Database (`stock_summary`)
 
 | Kolom | Tipe | Deskripsi |
 |-------|------|-----------|
@@ -98,6 +157,40 @@ Evaluation & Best Model Selection
 Save Model → Prediction
 ```
 
+### Langkah Menjalankan
+
+1. Pastikan file `transaksi_harian_202605251947.csv` berada di folder yang sama dengan notebook
+2. Buka `modeling/golden_cross_modeling.ipynb`
+3. Jalankan **Cell 1** — Install library: `!pip install pandas numpy matplotlib scikit-learn`
+4. Jalankan **Cell 2** — Import library
+5. Jalankan **Cell 3** — Konfigurasi (threshold, test size, path CSV). **Ubah `CSV_PATH` jika nama file CSV berbeda**
+6. Jalankan **Cell 4** — Load data CSV (otomatis deteksi separator `;`)
+7. Jalankan **Cell 5** — Statistik deskriptif
+8. Jalankan **Cell 6** — Preprocessing: handle `open_price=0`, `range_intraday_pct` NaN, hapus `volume=0`
+9. Jalankan **Cell 7** — Target labeling: BULLISH/NEUTRAL/BEARISH berdasarkan `changes_pct`
+10. Jalankan **Cell 8** — Visualisasi distribusi target
+11. Jalankan **Cell 9** — EDA (Exploratory Data Analysis)
+12. Jalankan **Cell 10** — Feature engineering (15 fitur derivatif)
+13. Jalankan **Cell 11** — Persiapan fitur & split data
+14. Jalankan **Cell 12** — Train/test split
+15. Jalankan **Cell 13** — Training 6 model ML (±1-5 menit)
+16. Jalankan **Cell 14** — Evaluasi detail best model
+17. Jalankan **Cell 15** — Visualisasi hasil (4 plot)
+18. Jalankan **Cell 16** — Ringkasan perbandingan model
+19. Jalankan **Cell 17** — Simpan model ke `golden_cross_model.pkl`
+20. Jalankan **Cell 18** — Prediksi dengan model (menampilkan Top 10 BULLISH & BEARISH)
+
+### Output yang Diharapkan
+
+| Cell | Output |
+|------|--------|
+| Cell 4 | Data dimuat: 570 baris, 19 kolom |
+| Cell 6 | Data setelah preprocessing: ~451 baris (setelah hapus volume=0) |
+| Cell 7 | Distribusi target: BULLISH ~47%, NEUTRAL ~33%, BEARISH ~20% |
+| Cell 13 | Hasil training 6 model (accuracy, precision, recall, F1, CV) |
+| Cell 17 | Model disimpan ke `golden_cross_model.pkl` |
+| Cell 18 | Top 10 BULLISH & Top 10 BEARISH saham |
+
 ### Feature Engineering (15 Fitur)
 
 | No | Fitur | Deskripsi | Relevansi Golden Cross |
@@ -113,8 +206,8 @@ Save Model → Prediction
 | 9 | `tx_value_log` | Log nilai transaksi | Skala transaksi |
 | 10 | `bid_offer_ratio` | Bid volume / offer volume | Tekanan beli vs jual |
 | 11 | `price_spread_pct` | Spread bid-offer | Likuiditas pasar |
-| 12 | `high_changes_abs` | |Perubahan high dari prev| Jangkauan atas |
-| 13 | `low_changes_abs` | |Perubahan low dari prev| Jangkauan bawah |
+| 12 | `high_changes_abs` | Perubahan high dari prev | Jangkauan atas |
+| 13 | `low_changes_abs` | Perubahan low dari prev | Jangkauan bawah |
 | 14 | `gap_up_pct` | Gap up dari prev close | Sentimen pembukaan |
 | 15 | `range_intraday_pct` | Range intraday % | Volatilitas keseluruhan |
 
@@ -131,14 +224,14 @@ Save Model → Prediction
 
 ### Hasil Evaluasi
 
-| Model | Accuracy | Precision | Recall | F1-Score | CV Accuracy |
-|-------|----------|-----------|--------|----------|-------------|
-| MLP Neural Net | 93.69% | - | - | - | 92.05% |
-| Gradient Boosting | 91.89% | - | - | - | 92.27% |
-| Random Forest | 90.99% | - | - | - | 90.23% |
-| Decision Tree | 90.99% | - | - | - | 90.68% |
-| SVM (RBF) | 81.08% | - | - | - | 83.86% |
-| KNN (k=5) | 72.97% | - | - | - | 77.73% |
+| Model | Test Accuracy | CV Accuracy |
+|-------|--------------|-------------|
+| **MLP Neural Net** | **93.69%** | **92.05%** |
+| Gradient Boosting | 91.89% | 92.27% |
+| Random Forest | 90.99% | 90.23% |
+| Decision Tree | 90.99% | 90.68% |
+| SVM (RBF) | 81.08% | 83.86% |
+| KNN (k=5) | 72.97% | 77.73% |
 
 > **Best Model: MLP Neural Net** dengan accuracy 93.69% dan CV accuracy 92.05%
 
@@ -151,19 +244,11 @@ Save Model → Prediction
 | `scikit-learn` | Machine learning (6 algoritma klasifikasi, evaluasi, preprocessing) |
 | `pickle` | Serialisasi model |
 
-### Cara Menjalankan
-1. Upload file `transaksi_harian_202605251947.csv` ke folder yang sama dengan notebook
-2. Buka `modeling/golden_cross_modeling.ipynb` di Jupyter Notebook / Google Colab
-3. Jalankan setiap cell secara berurutan
-4. Output: model terbaik (`golden_cross_model.pkl`), visualisasi (`golden_cross_results.png`), dan prediction report
-
 ---
 
 ## Penjelasan Untuk Presentasi
 
 ### Use Case 1 — Ingestion (Bagian yang Perlu Dijelaskan)
-
-**Pertanyaan yang mungkin ditanyakan:**
 
 1. **Mengapa menggunakan `curl_cffi` bukan `requests`?**
    - Website IDX dilindungi Cloudflare yang memblokir request dari bot/scraper biasa. `curl_cffi` mengimitasi TLS handshake browser Chrome asli sehingga bisa bypass proteksi tersebut.
@@ -178,6 +263,12 @@ Save Model → Prediction
 
 4. **Apa arti "idempotent"?**
    - Jika data tanggal tersebut sudah ada di database, program akan menghapus data lama lalu insert ulang (tidak ada duplikasi).
+
+5. **Data apa yang diambil dari IDX API?**
+   - Stock Summary: kode saham, nama emiten, harga (open/high/low/close), volume, value, frequency, foreign buy/sell, bid/offer, dll. Sekitar 959 saham per hari.
+
+6. **Kenapa perdua metode scraping (curl_cffi + cloudscraper)?**
+   - `curl_cffi` lebih andal tapi kadang tidak terinstall di Colab. `cloudscraper` sebagai fallback memastikan program tetap berjalan jika salah satu gagal.
 
 ---
 
@@ -207,20 +298,42 @@ Save Model → Prediction
 6. **Apa itu Feature Importance?**
    - Metode untuk mengetahui fitur mana yang paling berpengaruh dalam keputusan model. Pada Random Forest/Gradient Boosting, fitur dengan importance tinggi berarti fitur tersebut paling sering digunakan untuk splitting.
 
+7. **Bagaimana preprocessing menangani data kotor?**
+   - `open_price=0`: Diisi dengan `prev_price` (saham tidak diperdagangkan di sesi pembukaan)
+   - `range_intraday_pct NaN`: Diisi dengan 0 (saham tanpa pergerakan intraday)
+   - `volume=0`: Baris dihapus (saham tidak diperdagangkan sama sekali, tidak relevan untuk analisis)
+   - Setelah preprocessing: 570 → ~451 baris
+
+8. **Apa arti threshold +1% dan -1%?**
+   - Threshold menentukan batas kelas. Saham yang naik >1% dikategorikan BULLISH (sinyal beli), yang turun <-1% dikategorikan BEARISH (sinyal jual), dan sisanya NEUTRAL.
+
+---
+
+## Troubleshooting
+
+| Masalah | Solusi |
+|---------|--------|
+| `[EXTRACT] HTTP Status: 403` | IDX API memblokir request. Program otomatis retry dengan fallback ke `cloudscraper`. Jika tetap gagal, coba jalankan ulang setelah beberapa menit. |
+| `ModuleNotFoundError: No module named 'curl_cffi'` | Jalankan `!pip install curl_cffi` di cell pertama notebook |
+| `FileNotFoundError: transaksi_harian_...csv` | Pastikan file CSV berada di folder yang sama dengan notebook, atau ubah `CSV_PATH` di Cell 3 |
+| `ValueError: Cannot use stratify with only 1 sample` | Data terlalu sedikit untuk stratifikasi. Kurangi jumlah kelas atau tambah data |
+| Plot tidak muncul di Jupyter | Tambahkan `%matplotlib inline` di awal notebook |
+
 ---
 
 ## Requirements
 
 ```
-pandas
-numpy
-matplotlib
-scikit-learn
-curl_cffi
-sqlalchemy
+pandas>=2.0
+numpy>=1.24
+matplotlib>=3.7
+scikit-learn>=1.3
+curl_cffi>=0.5
+cloudscraper>=1.2
+sqlalchemy>=2.0
 ```
 
-Install semua:
+Install semua sekaligus:
 ```bash
-pip install pandas numpy matplotlib scikit-learn curl_cffi sqlalchemy
+pip install pandas numpy matplotlib scikit-learn curl_cffi cloudscraper sqlalchemy
 ```
