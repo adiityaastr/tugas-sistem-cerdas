@@ -1,14 +1,11 @@
-name: CD - Deploy to Supabase
+name: CI - Build & Test
 
 on:
-  push:
+  pull_request:
     branches: [main]
-  schedule:
-    - cron: "30 10 * * 1-5"
-  workflow_dispatch:
 
 jobs:
-  ingest:
+  test:
     runs-on: ubuntu-latest
 
     steps:
@@ -23,10 +20,13 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run ingestion pipeline (Jupyter Notebook)
+      - name: Install Jupyter
+        run: pip install jupyter nbconvert
+
+      - name: Run notebook (SQLite mode — test only)
         env:
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
-        run: |
-          pip install jupyter nbconvert
-          jupyter nbconvert --to notebook --execute --inplace ingestion/ingestion.ipynb
+        run: jupyter nbconvert --to notebook --execute --inplace ingestion/ingestion.ipynb
+
+      - name: Test passed
+        run: echo "CI PASSED - Notebook berjalan tanpa error"

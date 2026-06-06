@@ -386,6 +386,44 @@ def load(df: pd.DataFrame):
 
 
 # ═══════════════════════════════════════════════════════════════════
+# CLEANUP
+# ═══════════════════════════════════════════════════════════════════
+
+
+def cleanup(retention_days: int = 90):
+    """Menghapus data yang lebih lama dari retention_days dari database."""
+    from datetime import timedelta
+
+    engine = create_engine(DB_URL, echo=False)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+
+    cutoff_date = (datetime.now() - timedelta(days=retention_days)).strftime("%Y-%m-%d")
+    old_count = session.query(StockSummary).filter(
+        StockSummary.date < cutoff_date
+    ).count()
+
+    if old_count > 0:
+        session.query(StockSummary).filter(
+            StockSummary.date < cutoff_date
+        ).delete()
+        session.commit()
+        print(f"[{timestamp()}] CLEANUP: {old_count} record sebelum {cutoff_date} dihapus.")
+
+    total_now = session.query(StockSummary).count()
+    dates = (
+        session.query(StockSummary.date)
+        .distinct()
+        .order_by(StockSummary.date)
+        .all()
+    )
+    print(f"  Total record sekarang: {total_now}")
+    if dates:
+        print(f"  Rentang tanggal: {dates[0][0]} s/d {dates[-1][0]}")
+    session.close()
+
+
+# ═══════════════════════════════════════════════════════════════════
 # UTILITY
 # ═══════════════════════════════════════════════════════════════════
 
@@ -416,6 +454,9 @@ if __name__ == "__main__":
 
         # LOAD
         load(df)
+
+        # CLEANUP
+        cleanup()
 
         # SUMMARY
         print("=" * 60)
