@@ -3,5 +3,7 @@ __pycache__/
 *.pyc
 *.db
 *.pkl
+*.csv
+.env
 golden_cross_results.png
 golden_cross_results.
