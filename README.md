@@ -1,11 +1,10 @@
 # Tugas Besar — Sistem Cerdas
 
-Proyek ini terdiri dari **2 use case** + **CI/CD pipeline otomatis**:
+Proyek ini terdiri dari **1 use case** + **CI/CD pipeline otomatis**:
 
 | # | Use Case | Deskripsi |
 |---|----------|-----------|
 | 1 | **Ingestion (ETL)** | Scraping data ringkasan saham IDX → database |
-| 2 | **Golden Cross Modelling** | Klasifikasi sinyal pasar (BULLISH/NEUTRAL/BEARISH) |
 
 ---
 
@@ -217,67 +216,6 @@ Mengambil data ringkasan perdagangan saham harian dari IDX dan menyimpannya ke d
 ### Idempotent Load
 
 Setiap kali pipeline jalan, data dengan tanggal yang sama **dihapus dulu** lalu di-insert ulang. Tidak akan ada duplikat, berapa kali pun dijalankan.
-
----
-
-## Use Case 2: Golden Cross Detection (Modelling)
-
-### Konsep
-
-**Golden Cross** (SMA-50 > SMA-200) → sinyal **bullish** (beli).
-**Death Cross** (SMA-50 < SMA-200) → sinyal **bearish** (jual).
-
-Karena data berbentuk cross-sectional (570 saham dalam 1 hari), konsep ini diadaptasi menjadi **klasifikasi 3 kelas**:
-
-| Kelas | Kondisi | Interpretasi |
-|-------|---------|---------------|
-| **BULLISH** | `changes_pct > +1%` | Sinyal Golden Cross |
-| **NEUTRAL** | `-1% ≤ changes_pct ≤ +1%` | Tidak ada sinyal jelas |
-| **BEARISH** | `changes_pct < -1%` | Sinyal Death Cross |
-
-### Flow
-
-```
-Data CSV (570 saham)
-  → Preprocessing (handle NaN, volume=0, open_price=0)
-  → Feature Engineering (15 fitur teknikal intraday)
-  → Target Labeling (BULLISH / NEUTRAL / BEARISH)
-  → Train/Test Split (80/20, stratified)
-  → Training 6 Algoritma ML
-  → Evaluation → Best Model (MLP Neural Net)
-  → Save Model → Predict Top 10 BULLISH & BEARISH
-```
-
-### 15 Fitur yang Digunakan
-
-| No | Fitur | Deskripsi |
-|----|-------|-----------|
-| 1 | `gap_pct` | Gap pembukaan dari previous close |
-| 2 | `close_position` | Posisi close relatif thd high-low |
-| 3 | `body_pct` | Body candle / prev_price |
-| 4 | `is_bullish_candle` | Close > Open (1/0) |
-| 5 | `upper_shadow_pct` | Shadow atas candle |
-| 6 | `lower_shadow_pct` | Shadow bawah candle |
-| 7 | `high_low_range_pct` | Range harga intraday |
-| 8 | `volume_per_freq` | Volume / frekuensi |
-| 9 | `tx_value_log` | Log nilai transaksi |
-| 10 | `bid_offer_ratio` | Bid volume / offer volume |
-| 11 | `price_spread_pct` | Spread bid-offer |
-| 12 | `high_changes_abs` | Perubahan high dari prev |
-| 13 | `low_changes_abs` | Perubahan low dari prev |
-| 14 | `gap_up_pct` | Gap up dari prev close |
-| 15 | `range_intraday_pct` | Range intraday % |
-
-### Hasil Model (Urut Accuracy)
-
-| Rank | Model | Test Accuracy | CV Accuracy |
-|------|-------|:---:|:---:|
-| **1** | **MLP Neural Net** | **93.69%** | **92.05%** |
-| 2 | Gradient Boosting | 91.89% | 92.27% |
-| 3 | Random Forest | 90.99% | 90.23% |
-| 4 | Decision Tree | 90.99% | 90.68% |
-| 5 | SVM (RBF) | 81.08% | 83.86% |
-| 6 | KNN (k=5) | 72.97% | 77.73% |
 
 ---
 
