@@ -25,6 +25,7 @@ jobs:
       - name: Run ingestion pipeline (Jupyter Notebook)
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
         run: |
           pip install jupyter nbconvert
           jupyter nbconvert --to notebook --execute --inplace ingestion/ingestion.ipynb

@@ -91,6 +91,7 @@ def extract_from_idx() -> list[dict]:
     """Mengambil data stock summary dari API IDX.
 
     Strategi:
+      0. ScraperAPI — proxy residensial (prioritas utama).
       1. curl_cffi — coba 4 browser impersonation.
       2. cloudscraper — fallback dengan 4x retry.
       3. requests — last resort.
@@ -104,6 +105,34 @@ def extract_from_idx() -> list[dict]:
     success = False
     response = None
     last_error = ""
+
+    # ── Metode 0: ScraperAPI proxy residensial ──
+    scraper_key = os.getenv("SCRAPER_API_KEY")
+    if scraper_key:
+        try:
+            print("  [0/3] ScraperAPI (proxy residensial)...")
+            import requests as scraper_requests
+            resp = scraper_requests.get(
+                "http://api.scraperapi.com/",
+                params={
+                    "api_key": scraper_key,
+                    "url": IDX_API_URL,
+                    **IDX_API_PARAMS,
+                },
+                timeout=90,
+            )
+            print(f"  Status: {resp.status_code}")
+            if resp.status_code == 200 and resp.json().get("data"):
+                response = resp
+                print("  BERHASIL via ScraperAPI")
+                success = True
+            else:
+                last_error = f"ScraperAPI HTTP {resp.status_code}"
+        except Exception as e:
+            last_error = f"ScraperAPI: {e}"
+            print(f"  Gagal: {e}")
+    else:
+        print("  [0/3] ScraperAPI dilewati (key tidak diset)")
 
     # ── Metode 1: curl_cffi multi-impersonation ──
     impersonations = ["chrome", "edge", "safari", "firefox"]
