@@ -111,13 +111,13 @@ def extract_from_idx() -> list[dict]:
     if scraper_key:
         try:
             print("  [0/3] ScraperAPI (proxy residensial)...")
+            target_url = f"{IDX_API_URL}?length=9999&start=0"
             import requests as scraper_requests
             resp = scraper_requests.get(
                 "http://api.scraperapi.com/",
                 params={
                     "api_key": scraper_key,
-                    "url": IDX_API_URL,
-                    **IDX_API_PARAMS,
+                    "url": target_url,
                 },
                 timeout=90,
             )
