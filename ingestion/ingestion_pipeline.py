@@ -91,8 +91,9 @@ def extract_from_idx() -> list[dict]:
     """Mengambil data stock summary dari API IDX.
 
     Strategi:
-      1. curl_cffi (TLS fingerprint impersonation) — utama.
-      2. cloudscraper (JS challenge solver) — fallback dengan 3x retry.
+      1. curl_cffi — coba 4 browser impersonation.
+      2. cloudscraper — fallback dengan 4x retry.
+      3. requests — last resort.
 
     Returns:
         List of dict dari field "data" di JSON response.
@@ -100,60 +101,101 @@ def extract_from_idx() -> list[dict]:
     print(f"[{timestamp()}] EXTRACT - Mulai scraping...")
     print(f"  URL: {IDX_API_URL}")
 
+    success = False
     response = None
+    last_error = ""
 
-    # ── Metode 1: curl_cffi ──
-    try:
-        print("  [1/2] curl_cffi (TLS impersonation)...")
-        response = cf_requests.get(
-            IDX_API_URL,
-            params=IDX_API_PARAMS,
-            impersonate="chrome",
-            timeout=REQUEST_TIMEOUT,
-        )
-        print(f"  Status: {response.status_code}")
-        if response.status_code != 200:
-            raise Exception(f"HTTP {response.status_code}")
-        print("  BERHASIL via curl_cffi")
-    except Exception as e:
-        print(f"  GAGAL: {e}")
-        print("  [2/2] cloudscraper (fallback)...")
-
-        scraper = cloudscraper.create_scraper(
-            browser={"browser": "chrome", "platform": "windows", "desktop": True}
-        )
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
-            "Referer": "https://www.idx.co.id/",
-            "Accept": "application/json, text/plain, */*",
-        }
-
-        for attempt in range(1, 4):
-            try:
-                response = scraper.get(
-                    IDX_API_URL,
-                    params=IDX_API_PARAMS,
-                    timeout=REQUEST_TIMEOUT,
-                    headers=headers,
-                )
-                print(f"  Retry {attempt}/3 — Status: {response.status_code}")
-                if response.status_code == 200:
-                    print("  BERHASIL via cloudscraper")
-                    break
-            except Exception as retry_err:
-                print(f"  Retry {attempt}/3 — Error: {retry_err}")
-            if attempt < 3:
-                time.sleep(3)
-
-        if response is None or response.status_code != 200:
-            status = response.status_code if response else "N/A"
-            raise RuntimeError(
-                f"GAGAL setelah 3 percobaan. HTTP: {status}"
+    # ── Metode 1: curl_cffi multi-impersonation ──
+    impersonations = ["chrome", "edge", "safari", "firefox"]
+    for browser in impersonations:
+        if success:
+            break
+        try:
+            print(f"  curl_cffi — impersonate={browser} ...")
+            response = cf_requests.get(
+                IDX_API_URL,
+                params=IDX_API_PARAMS,
+                impersonate=browser,
+                timeout=REQUEST_TIMEOUT,
             )
+            print(f"  Status: {response.status_code}")
+            if response.status_code == 200:
+                print(f"  BERHASIL via curl_cffi ({browser})")
+                success = True
+            else:
+                last_error = f"HTTP {response.status_code} ({browser})"
+        except Exception as e:
+            last_error = str(e)
+            print(f"  Gagal ({browser}): {e}")
+
+    # ── Metode 2: cloudscraper ──
+    if not success:
+        print("  curl_cffi gagal semua. Fallback: cloudscraper ...")
+        try:
+            scraper = cloudscraper.create_scraper(
+                browser={"browser": "chrome", "platform": "windows", "desktop": True}
+            )
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Referer": "https://www.idx.co.id/",
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
+            }
+            for attempt in range(1, 5):
+                try:
+                    response = scraper.get(
+                        IDX_API_URL,
+                        params=IDX_API_PARAMS,
+                        timeout=REQUEST_TIMEOUT,
+                        headers=headers,
+                    )
+                    print(f"  Retry {attempt}/4 — Status: {response.status_code}")
+                    if response.status_code == 200:
+                        print("  BERHASIL via cloudscraper")
+                        success = True
+                        break
+                except Exception as retry_err:
+                    print(f"  Retry {attempt}/4 — Error: {retry_err}")
+                if attempt < 4:
+                    time.sleep(5)
+        except Exception as e:
+            last_error = f"cloudscraper: {e}"
+            print(f"  cloudscraper gagal: {e}")
+
+    # ── Metode 3: requests last resort ──
+    if not success:
+        print("  Semua metode gagal. Last resort: requests standar ...")
+        try:
+            import requests as std_requests
+            std_headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Referer": "https://www.idx.co.id/",
+                "Accept": "application/json, text/plain, */*",
+                "Origin": "https://www.idx.co.id",
+            }
+            response = std_requests.get(
+                IDX_API_URL, params=IDX_API_PARAMS,
+                timeout=REQUEST_TIMEOUT, headers=std_headers,
+            )
+            print(f"  Status: {response.status_code}")
+            if response.status_code == 200:
+                print("  BERHASIL via requests standar")
+                success = True
+        except Exception as e:
+            last_error = str(e)
+
+    if not success:
+        raise RuntimeError(
+            f"GAGAL mengambil data setelah semua metode. Error: {last_error}"
+        )
 
     # ── Parse JSON ──
     payload = response.json()
