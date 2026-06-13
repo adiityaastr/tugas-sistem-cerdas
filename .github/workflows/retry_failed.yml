@@ -1,21 +1,14 @@
-name: CD - Deploy to Supabase
+name: Retry Failed Ingestion
 
 on:
-  push:
-    branches: [main]
   schedule:
-    - cron: "30 10 * * 1-5"
+    - cron: "0 1-11 * * 1-5"
   workflow_dispatch:
-    inputs:
-      date:
-        description: 'Tanggal backfill (YYYY-MM-DD) — kosongkan untuk hari ini'
-        required: false
-        type: string
-        default: ''
 
 jobs:
-  ingest:
+  retry:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -29,9 +22,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run ingestion pipeline
+      - name: Retry failed dates
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
-          INGEST_DATE: ${{ github.event.inputs.date || '' }}
-        run: python ingestion/ingestion_pipeline.py
+        run: python -c "from ingestion.ingestion_pipeline import retry_failed_dates; retry_failed_dates()"

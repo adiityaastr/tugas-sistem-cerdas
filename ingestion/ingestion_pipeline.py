@@ -14,7 +14,10 @@ import json
 import os
 import sys
 import time
-from datetime import datetime
+import subprocess
+from datetime import datetime, timedelta
+
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from curl_cffi import requests as cf_requests
 import cloudscraper
@@ -37,6 +40,12 @@ if SUPABASE_DB_URL:
 else:
     DB_URL = "sqlite:///ingestion/idx_stock.db"
     DB_MODE = "SQLITE (lokal)"
+
+INGEST_DATE = os.getenv("INGEST_DATE", "")
+MAX_GLOBAL_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
+STALE_TIMEOUT_MINUTES = 30
+MAX_FAILED_RETRIES = 5
+MAX_EMPTY_RETRIES = 3
 
 # ═══════════════════════════════════════════════════════════════════
 # DATABASE MODEL (SQLAlchemy ORM)
@@ -82,12 +91,35 @@ class StockSummary(Base):
         return f"<StockSummary {self.stock_code} {self.date}>"
 
 
+class IngestionLog(Base):
+    __tablename__ = "ingestion_log"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(String, nullable=False, index=True)
+    status = Column(String, nullable=False, default="pending")
+    record_count = Column(Integer, default=0)
+    error_message = Column(String, nullable=True)
+    extraction_method = Column(String, nullable=True)
+    retry_count = Column(Integer, default=0)
+    started_at = Column(String, nullable=True)
+    finished_at = Column(String, nullable=True)
+    duration_seconds = Column(Float, nullable=True)
+
+    def __repr__(self):
+        return f"<IngestionLog {self.date} {self.status} retry={self.retry_count}>"
+
+
 # ═══════════════════════════════════════════════════════════════════
 # EXTRACT
 # ═══════════════════════════════════════════════════════════════════
 
 
-def extract_from_idx() -> list[dict]:
+@retry(
+    stop=stop_after_attempt(MAX_GLOBAL_RETRIES),
+    wait=wait_exponential(multiplier=60, max=300),
+    reraise=True,
+)
+def extract_from_idx() -> tuple:
     """Mengambil data stock summary dari API IDX.
 
     Strategi:
@@ -97,21 +129,29 @@ def extract_from_idx() -> list[dict]:
       3. requests — last resort.
 
     Returns:
-        List of dict dari field "data" di JSON response.
+        Tuple of (list of dict dari field "data", method_name).
     """
     print(f"[{timestamp()}] EXTRACT - Mulai scraping...")
     print(f"  URL: {IDX_API_URL}")
+    if INGEST_DATE:
+        print(f"  Target date: {INGEST_DATE}")
 
     success = False
     response = None
     last_error = ""
+    method_name = "unknown"
+
+    params = dict(IDX_API_PARAMS)
+    if INGEST_DATE:
+        params["date"] = INGEST_DATE
 
     # ── Metode 0: ScraperAPI proxy residensial ──
     scraper_key = os.getenv("SCRAPER_API_KEY")
     if scraper_key:
         try:
             print("  [0/3] ScraperAPI (proxy residensial)...")
-            target_url = f"{IDX_API_URL}?length=9999&start=0"
+            from urllib.parse import urlencode
+            target_url = f"{IDX_API_URL}?{urlencode(params)}"
             import requests as scraper_requests
             resp = scraper_requests.get(
                 "http://api.scraperapi.com/",
@@ -124,6 +164,7 @@ def extract_from_idx() -> list[dict]:
             print(f"  Status: {resp.status_code}")
             if resp.status_code == 200 and resp.json().get("data"):
                 response = resp
+                method_name = "scraperapi"
                 print("  BERHASIL via ScraperAPI")
                 success = True
             else:
@@ -143,12 +184,13 @@ def extract_from_idx() -> list[dict]:
             print(f"  curl_cffi — impersonate={browser} ...")
             response = cf_requests.get(
                 IDX_API_URL,
-                params=IDX_API_PARAMS,
+                params=params,
                 impersonate=browser,
                 timeout=REQUEST_TIMEOUT,
             )
             print(f"  Status: {response.status_code}")
             if response.status_code == 200:
+                method_name = f"curl_cffi:{browser}"
                 print(f"  BERHASIL via curl_cffi ({browser})")
                 success = True
             else:
@@ -178,12 +220,13 @@ def extract_from_idx() -> list[dict]:
                 try:
                     response = scraper.get(
                         IDX_API_URL,
-                        params=IDX_API_PARAMS,
+                        params=params,
                         timeout=REQUEST_TIMEOUT,
                         headers=headers,
                     )
                     print(f"  Retry {attempt}/4 — Status: {response.status_code}")
                     if response.status_code == 200:
+                        method_name = "cloudscraper"
                         print("  BERHASIL via cloudscraper")
                         success = True
                         break
@@ -211,11 +254,12 @@ def extract_from_idx() -> list[dict]:
                 "Origin": "https://www.idx.co.id",
             }
             response = std_requests.get(
-                IDX_API_URL, params=IDX_API_PARAMS,
+                IDX_API_URL, params=params,
                 timeout=REQUEST_TIMEOUT, headers=std_headers,
             )
             print(f"  Status: {response.status_code}")
             if response.status_code == 200:
+                method_name = "requests"
                 print("  BERHASIL via requests standar")
                 success = True
         except Exception as e:
@@ -231,7 +275,7 @@ def extract_from_idx() -> list[dict]:
     records = payload.get("data", [])
     total = payload.get("recordsTotal", 0)
     print(f"  Diambil {len(records)} record (total: {total})")
-    return records
+    return records, method_name
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -392,7 +436,6 @@ def load(df: pd.DataFrame):
 
 def cleanup(retention_days: int = 90):
     """Menghapus data yang lebih lama dari retention_days dari database."""
-    from datetime import timedelta
 
     engine = create_engine(DB_URL, echo=False)
     Session = sessionmaker(bind=engine)
@@ -424,6 +467,114 @@ def cleanup(retention_days: int = 90):
 
 
 # ═══════════════════════════════════════════════════════════════════
+# INGESTION LOG (tracking)
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _get_session():
+    engine = create_engine(DB_URL, echo=False)
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine)()
+
+
+def log_start(date_val: str):
+    session = _get_session()
+    existing = session.query(IngestionLog).filter(IngestionLog.date == date_val).first()
+    if existing:
+        existing.status = "running"
+        existing.retry_count = (existing.retry_count or 0) + 1
+        existing.started_at = timestamp()
+        existing.error_message = None
+        existing.finished_at = None
+    else:
+        session.add(IngestionLog(
+            date=date_val,
+            status="running",
+            retry_count=1,
+            started_at=timestamp(),
+        ))
+    session.commit()
+    session.close()
+
+
+def log_result(date_val: str, status: str, record_count: int,
+               method: str = None, error: str = None, duration: float = None):
+    session = _get_session()
+    entry = session.query(IngestionLog).filter(IngestionLog.date == date_val).first()
+    if entry:
+        entry.status = status
+        entry.record_count = record_count
+        entry.finished_at = timestamp()
+        entry.duration_seconds = duration
+        entry.error_message = error[:500] if error else None
+        entry.extraction_method = method
+        session.commit()
+    session.close()
+
+
+def stale_reset():
+    session = _get_session()
+    cutoff = (datetime.now() - timedelta(minutes=STALE_TIMEOUT_MINUTES)).strftime("%Y-%m-%d %H:%M:%S")
+    stale = (
+        session.query(IngestionLog)
+        .filter(IngestionLog.status == "running")
+        .filter(IngestionLog.started_at < cutoff)
+        .all()
+    )
+    for entry in stale:
+        entry.status = "failed"
+        entry.error_message = "Stale — running > 30 menit, di-reset oleh stale_reset"
+        print(f"[{timestamp()}] STALE RESET: {entry.date} → failed")
+    if stale:
+        session.commit()
+    session.close()
+
+
+def get_failed_dates() -> list[str]:
+    session = _get_session()
+    stale_reset()
+    today = datetime.now().strftime("%Y-%m-%d")
+    results = (
+        session.query(IngestionLog)
+        .filter(
+            IngestionLog.status.in_(["failed", "empty"]),
+            IngestionLog.date <= today,
+        )
+        .all()
+    )
+    dates_to_retry = []
+    for row in results:
+        max_r = MAX_FAILED_RETRIES if row.status == "failed" else MAX_EMPTY_RETRIES
+        if (row.retry_count or 0) < max_r:
+            dates_to_retry.append(row.date)
+    session.close()
+    return sorted(set(dates_to_retry))
+
+
+def retry_failed_dates():
+    dates = get_failed_dates()
+    if not dates:
+        print(f"[{timestamp()}] Tidak ada tanggal gagal yang perlu di-retry.")
+        return
+
+    print(f"[{timestamp()}] RETRY: {len(dates)} tanggal gagal → {dates}")
+    for date_val in dates:
+        print(f"\n{'─' * 60}")
+        print(f"  Retrying: {date_val}")
+        env = os.environ.copy()
+        env["INGEST_DATE"] = date_val
+        env["MAX_RETRIES"] = "1"
+        try:
+            subprocess.run(
+                [sys.executable, __file__],
+                env=env,
+                check=True,
+            )
+        except subprocess.CalledProcessError as e:
+            print(f"  Retry gagal untuk {date_val} (exit code {e.returncode})")
+
+
+# ═══════════════════════════════════════════════════════════════════
 # UTILITY
 # ═══════════════════════════════════════════════════════════════════
 
@@ -437,20 +588,31 @@ def timestamp() -> str:
 # ═══════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    start_time = time.time()
+    attempt_date = INGEST_DATE or datetime.now().strftime("%Y-%m-%d")
+
     print("=" * 60)
     print(f"  IDX INGESTION PIPELINE — {timestamp()}")
     print(f"  DB: {DB_MODE}")
+    if INGEST_DATE:
+        print(f"  Target date: {INGEST_DATE}")
     print("=" * 60)
 
     try:
+        # LOG START
+        log_start(attempt_date)
+
         # EXTRACT
-        records = extract_from_idx()
+        records, method = extract_from_idx()
         if not records:
-            print(f"[{timestamp()}] ERROR: Tidak ada data dari API!")
-            sys.exit(1)
+            print(f"[{timestamp()}] Tidak ada data dari API (mungkin tanggal libur).")
+            elapsed = time.time() - start_time
+            log_result(attempt_date, "empty", 0, method=method, duration=elapsed)
+            sys.exit(0)
 
         # TRANSFORM
         df = transform(records)
+        actual_date = df["date"].iloc[0]
 
         # LOAD
         load(df)
@@ -458,14 +620,26 @@ if __name__ == "__main__":
         # CLEANUP
         cleanup()
 
+        # LOG RESULT
+        elapsed = time.time() - start_time
+        log_result(actual_date, "success", len(df), method=method, duration=elapsed)
+
         # SUMMARY
         print("=" * 60)
         print(f"  PIPELINE SELESAI — {timestamp()}")
         print(f"  Record : {len(df)}")
-        print(f"  Tanggal: {df['date'].iloc[0] if len(df) > 0 else 'N/A'}")
+        print(f"  Tanggal: {actual_date}")
+        print(f"  Metode : {method}")
+        print(f"  Durasi : {elapsed:.1f} detik")
         print(f"  DB     : {DB_MODE}")
         print("=" * 60)
 
     except Exception as e:
-        print(f"[{timestamp()}] FATAL: {e}", file=sys.stderr)
+        elapsed = time.time() - start_time
+        err_msg = str(e)
+        print(f"[{timestamp()}] FATAL: {err_msg}", file=sys.stderr)
+        try:
+            log_result(attempt_date, "failed", 0, error=err_msg, duration=elapsed)
+        except Exception:
+            pass
         sys.exit(1)
