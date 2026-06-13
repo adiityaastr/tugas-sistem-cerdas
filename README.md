@@ -11,20 +11,93 @@ Proyek ini terdiri dari **1 use case** + **CI/CD pipeline otomatis**:
 ## Arsitektur Otomatisasi
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│                                                          │
-│   GitHub Actions (cloud) — GRATIS, laptop TIDAK USAH NYALA│
-│   │                                                      │
-│   ├─ CRON: Senin—Jumat, 17:30 WIB                        │
-│   │                                                      │
-│   ├─ ① ScraperAPI (proxy residensial)                    │
-│   │     └─ bypass Cloudflare IDX → 200 OK                │
-│   │                                                      │
-│   ├─ ② Extract JSON — Transform (Pandas)                 │
-│   │                                                      │
-│   └─ ③ Load ke Supabase PostgreSQL (cloud)               │
-│                                                          │
-└──────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                    GITHUB ACTIONS (cloud)                        │
+│                                                                  │
+│  ┌──────────────────────────┐  ┌────────────────────────────┐   │
+│  │ ingestion.yml            │  │ retry_failed.yml           │   │
+│  │ ┌──────────────────────┐ │  │ ┌────────────────────────┐ │   │
+│  │ │ Trigger:             │ │  │ │ Trigger:               │ │   │
+│  │ │ • push main          │ │  │ │ • cron tiap 2 jam      │ │   │
+│  │ │ • cron Mon-Fri 17:30 │ │  │ │ • workflow_dispatch    │ │   │
+│  │ │ • workflow_dispatch  │ │  │ └───────────┬────────────┘ │   │
+│  │ │   input: date (opt)  │ │  │             │              │   │
+│  │ └──────────┬───────────┘ │  │             ▼              │   │
+│  │            │              │  │  Query ingestion_log      │   │
+│  │            ▼              │  │  Cari tanggal gagal       │   │
+│  │   ingestion_pipeline.py   │  │  Jalankan ulang pipeline  │   │
+│  │   Extract → Transform     │  │  per tanggal gagal        │   │
+│  │   → Load → Log            │  └───────────────────────────┘   │
+│  └──────────────────────────┘                                   │
+│                                                                  │
+│                    │                          ▲                  │
+│                    ▼                          │                  │
+│  ┌────────────────────────────────────────────┴─────────────┐   │
+│  │              SUPABASE / SQLITE                           │   │
+│  │  ┌──────────────┐  ┌──────────────┐                     │   │
+│  │  │ stock_summary │  │ingestion_log │                     │   │
+│  │  │ (data saham)  │  │(tracking     │                     │   │
+│  │  │ 29 kolom      │  │ status/retry)│                     │   │
+│  │  └──────────────┘  └──────────────┘                     │   │
+│  └──────────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Dua Workflow, Dua Peran
+
+| | `ingestion.yml` | `retry_failed.yml` |
+|---|---|---|
+| **Peran** | **Eksekutor** — scrape & simpan data | **Supervisor** — cek log & retry yang gagal |
+| **Trigger** | Cron 1x/hari + push + manual | Cron tiap 2 jam + manual |
+| **Yang dijalankan** | `ingestion_pipeline.py` langsung | Query `ingestion_log` → panggil `.py` per tanggal gagal |
+| **Target** | 1 tanggal (hari ini / input manual) | n tanggal (hasil query `ingestion_log`) |
+| **Tabel** | `stock_summary` | `ingestion_log` (baca) → `stock_summary` (via subprocess) |
+
+### Timeline Ilustrasi
+
+```
+08:00 ─ cron ingestion berjalan
+         → gagal (IP diblokir / timeout)
+         → catat di ingestion_log: "2025-06-13 | failed | retry=1"
+
+10:00 ─ cron retry_failed cek ingestion_log
+         → "oh, 13 Juni gagal. Coba lagi."
+         → panggil ingestion_pipeline.py untuk 2025-06-13
+         → BERHASIL! Update log: "2025-06-13 | success"
+
+12:00 ─ cron retry_failed cek log lagi
+         → "tidak ada yang gagal" → selesai (no-op)
+```
+
+### State Machine — ingestion_log
+
+```
+PENDING ──► RUNNING ──┬──► SUCCESS     (selesai, tidak di-retry)
+                       ├──► EMPTY       (max 3x retry, lalu EMPTY_FINAL)
+                       └──► FAILED      (max 5x retry, lalu DEAD LETTER — butuh intervensi manual)
+```
+
+### Cara Backfill Tanggal Tertentu
+
+```
+GitHub Actions → "CD - Deploy to Supabase" → Run workflow
+  │
+  ├─ Isi field "date": 2025-01-15
+  └─ Klik "Run workflow"
+```
+
+Pipeline akan mengirim parameter `date=2025-01-15` ke semua 4 metode scraping (ScraperAPI + curl_cffi + cloudscraper + requests). Jika IDX API mendukung parameter `date`, data historis akan diambil. Jika tidak, data yang diambil adalah data hari ini.
+
+Status disimpan di `ingestion_log` — kamu bisa cek hasilnya di Supabase dashboard → Table Editor → `ingestion_log`.
+
+### Cara Cek Status Ingestion
+
+Buka **Supabase Dashboard → SQL Editor**, jalankan:
+
+```sql
+SELECT date, status, record_count, retry_count, extraction_method, error_message
+FROM ingestion_log
+ORDER BY date DESC;
 ```
 
 | Komponen | Peran | Biaya |
@@ -41,7 +114,8 @@ Proyek ini terdiri dari **1 use case** + **CI/CD pipeline otomatis**:
 .
 ├── .github/
 │   └── workflows/
-│       └── ingestion.yml                # CI/CD cron job
+│       ├── ingestion.yml                # CI/CD ingestion harian + backfill
+│       └── retry_failed.yml             # Auto-retry tanggal gagal (BARU)
 ├── ingestion/
 │   ├── ingestion.ipynb                  # Notebook ETL + penjelasan detail
 │   ├── ingestion_pipeline.py            # Script production (standalone)
@@ -100,7 +174,7 @@ Proyek ini terdiri dari **1 use case** + **CI/CD pipeline otomatis**:
 ### Step 4 — Verifikasi
 
 1. Buka tab **Actions** di repo GitHub
-2. Klik **IDX Daily Ingestion** → **Run workflow** → **Run workflow**
+2. Klik **CD - Deploy to Supabase** → **Run workflow** → **Run workflow**
 3. Tunggu ~2 menit. Kalau sukses:
    ```
    [EXTRACT] BERHASIL via ScraperAPI
@@ -225,8 +299,10 @@ Setiap kali pipeline jalan, data dengan tanggal yang sama **dihapus dulu** lalu 
 
 | Trigger | Jadwal |
 |---------|--------|
-| **Cron** | Setiap Senin—Jumat, 17:30 WIB (10:30 UTC) |
-| **Manual** | Tab Actions → Run workflow |
+| **Cron (ingestion)** | Setiap Senin—Jumat, 17:30 WIB (10:30 UTC) |
+| **Cron (retry)** | Setiap Senin—Jumat, 08:00—18:00 WIB tiap 2 jam |
+| **Manual ingestion** | Tab Actions → Run workflow → isi `date` (opsional, untuk backfill) |
+| **Manual retry** | Tab Actions → Retry Failed Ingestion → Run workflow |
 
 ### Runtime
 
@@ -235,7 +311,7 @@ Setiap kali pipeline jalan, data dengan tanggal yang sama **dihapus dulu** lalu 
 | **OS** | Ubuntu 22.04 (GitHub Actions runner) |
 | **Python** | 3.11 |
 | **Durasi** | ~90 detik |
-| **Execute** | `jupyter nbconvert --to notebook --execute --inplace ingestion/ingestion.ipynb` |
+| **Execute** | `python ingestion/ingestion_pipeline.py` |
 
 ### Secrets yang Dibutuhkan
 
@@ -265,6 +341,8 @@ Setiap kali pipeline jalan, data dengan tanggal yang sama **dihapus dulu** lalu 
 | Local notebook: `NameError: name 'IDX_API_URL' is not defined` | Cell konfigurasi belum dijalankan | Jalankan cell dari atas ke bawah. Jangan skip cell 3 |
 | Data di Supabase kosong | Tabel belum dibuat | Tabel auto-create saat pipeline pertama jalan. Atau jalankan manual di notebook cell 4 |
 | Supabase "too many connections" | Connection pool habis | Pastikan pakai port 6543 (PgBouncer pooler), bukan 5432 |
+| `ingestion_log` kosong setelah pipeline | Tabel belum dibuat | Auto-create saat pipeline pertama jalan. Cek dengan `SELECT * FROM ingestion_log` |
+| Tanggal gagal tidak di-retry | `retry_count` sudah max (failed=5x, empty=3x) | Reset manual via Supabase SQL: `UPDATE ingestion_log SET retry_count=0, status='failed' WHERE date='...'` |
 
 ---
 
@@ -280,6 +358,7 @@ Setiap kali pipeline jalan, data dengan tanggal yang sama **dihapus dulu** lalu 
 | `cloudscraper` | ≥ 1.2 | Cloudflare JS solver |
 | `sqlalchemy` | ≥ 2.0 | ORM database |
 | `psycopg2-binary` | ≥ 2.9 | PostgreSQL driver |
+| `tenacity` | ≥ 8.0 | Retry logic dengan exponential backoff |
 | `requests` | built-in | HTTP client (ScraperAPI) |
 
 ### Install
