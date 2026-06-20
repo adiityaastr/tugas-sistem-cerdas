@@ -38,9 +38,11 @@ if SUPABASE_DB_URL:
     # Ensure psycopg v3 driver is used with proper URL encoding
     if "+psycopg" not in SUPABASE_DB_URL:
         # URL-encode username and password for psycopg3 compatibility
+        # IMPORTANT: Encode dot in username (postgres.project_ref format)
         from urllib.parse import urlparse, quote
         parsed = urlparse(SUPABASE_DB_URL)
-        encoded_username = quote(parsed.username, safe='')
+        # Encode dot (%2E) in username for psycopg3
+        encoded_username = parsed.username.replace('.', '%2E')
         encoded_password = quote(parsed.password, safe='')
         DB_URL = f"postgresql+psycopg://{encoded_username}:{encoded_password}@{parsed.hostname}:{parsed.port}{parsed.path}"
     else:
