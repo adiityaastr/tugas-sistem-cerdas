@@ -35,7 +35,8 @@ REQUEST_TIMEOUT = 30
 # Supabase (production) atau SQLite (dev fallback)
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 if SUPABASE_DB_URL:
-    DB_URL = SUPABASE_DB_URL
+    # Ensure psycopg v3 driver is used
+    DB_URL = SUPABASE_DB_URL.replace("postgresql://", "postgresql+psycopg://") if "+psycopg" not in SUPABASE_DB_URL else SUPABASE_DB_URL
     DB_MODE = "SUPABASE (PostgreSQL)"
 else:
     DB_URL = "sqlite:///ingestion/idx_stock.db"
@@ -287,7 +288,7 @@ def transform(records: list[dict]) -> pd.DataFrame:
     """Membersihkan dan menstandarkan data JSON menjadi DataFrame.
 
     Steps:
-      1. Map field PascalCase API → snake_case.
+      1. Map field PascalCase API -> snake_case.
       2. Drop baris tanpa stock_code / date.
       3. Konversi kolom numerik ke float.
       4. Standarisasi string (strip, uppercase).
@@ -334,7 +335,7 @@ def transform(records: list[dict]) -> pd.DataFrame:
     # Clean: drop missing identifiers
     before = len(df)
     df = df.dropna(subset=["stock_code", "date"])
-    print(f"  Drop tanpa stock_code/date: {before} → {len(df)}")
+    print(f"  Drop tanpa stock_code/date: {before} -> {len(df)}")
 
     # Clean: numeric coercion
     numeric_cols = [
@@ -363,7 +364,7 @@ def transform(records: list[dict]) -> pd.DataFrame:
 def load(df: pd.DataFrame):
     """Menyimpan DataFrame ke database (idempotent).
 
-    Jika data untuk tanggal tersebut sudah ada → hapus dulu → insert baru.
+    Jika data untuk tanggal tersebut sudah ada -> hapus dulu -> insert baru.
     """
     print(f"[{timestamp()}] LOAD - Menyimpan ke database ({DB_MODE})...")
 
@@ -386,7 +387,7 @@ def load(df: pd.DataFrame):
         ).delete()
         session.commit()
 
-    # Konversi DataFrame → ORM objects
+    # Konversi DataFrame -> ORM objects
     db_records = []
     for _, row in df.iterrows():
         db_records.append(StockSummary(
@@ -524,7 +525,7 @@ def stale_reset():
     for entry in stale:
         entry.status = "failed"
         entry.error_message = "Stale — running > 30 menit, di-reset oleh stale_reset"
-        print(f"[{timestamp()}] STALE RESET: {entry.date} → failed")
+        print(f"[{timestamp()}] STALE RESET: {entry.date} -> failed")
     if stale:
         session.commit()
     session.close()
@@ -557,7 +558,7 @@ def retry_failed_dates():
         print(f"[{timestamp()}] Tidak ada tanggal gagal yang perlu di-retry.")
         return
 
-    print(f"[{timestamp()}] RETRY: {len(dates)} tanggal gagal → {dates}")
+    print(f"[{timestamp()}] RETRY: {len(dates)} tanggal gagal -> {dates}")
     for date_val in dates:
         print(f"\n{'─' * 60}")
         print(f"  Retrying: {date_val}")
