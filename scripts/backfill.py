@@ -89,6 +89,24 @@ class BackfillTool:
             self.logger.error(f"Database connection failed: {e}")
             sys.exit(1)
     
+    def _stale_reset(self):
+        """Reset stuck 'running' entries older than 30 minutes"""
+        try:
+            with self.engine.connect() as conn:
+                cutoff = (datetime.now() - timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M:%S")
+                result = conn.execute(text("""
+                    UPDATE ingestion_log 
+                    SET status = 'failed', 
+                        error_message = 'Stale — running > 30 menit, di-reset oleh backfill'
+                    WHERE status = 'running' 
+                    AND started_at < :cutoff
+                """), {"cutoff": cutoff})
+                conn.commit()
+                if result.rowcount > 0:
+                    self.logger.info(f"Reset {result.rowcount} stuck 'running' entries to 'failed'")
+        except Exception as e:
+            self.logger.debug(f"Stale reset skipped: {e}")
+    
     def _parse_dates(self) -> List[str]:
         """Parse dates from arguments"""
         dates = []
@@ -106,6 +124,7 @@ class BackfillTool:
         
         elif self.args.all_failed:
             self._connect_db()
+            self._stale_reset()  # Reset stuck 'running' entries first
             dates = self._get_failed_dates()
         
         elif self.gh_dispatch:

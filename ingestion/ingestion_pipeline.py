@@ -623,6 +623,12 @@ if __name__ == "__main__":
         print(f"  Target date: {INGEST_DATE}")
     print("=" * 60)
 
+    # Auto-reset stuck "running" entries before starting
+    try:
+        stale_reset()
+    except Exception:
+        pass  # Ignore if DB not available
+
     try:
         # LOG START
         log_start(attempt_date)
@@ -645,9 +651,9 @@ if __name__ == "__main__":
         # CLEANUP
         cleanup()
 
-        # LOG RESULT
+        # LOG RESULT (use attempt_date to match log_start)
         elapsed = time.time() - start_time
-        log_result(actual_date, "success", len(df), method=method, duration=elapsed)
+        log_result(attempt_date, "success", len(df), method=method, duration=elapsed)
 
         # SUMMARY
         print("=" * 60)
