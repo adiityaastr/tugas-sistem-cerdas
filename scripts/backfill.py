@@ -45,10 +45,12 @@ class BackfillTool:
         """Fix URL for psycopg3 compatibility"""
         if not url or "+psycopg" in url:
             return url
-        url = url.strip()  # Remove whitespace/newlines
+        url = url.strip().strip('"').strip("'")  # Remove whitespace and quotes
         parsed = urlparse(url)
         if not parsed.username or not parsed.password:
             self.logger.error("Invalid SUPABASE_DB_URL format")
+            self.logger.debug(f"URL: {url[:50]}...")
+            self.logger.debug(f"parsed.username: {parsed.username}")
             return None
         encoded_username = parsed.username.replace('.', '%2E')
         encoded_password = quote(parsed.password, safe='')

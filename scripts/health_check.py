@@ -26,10 +26,12 @@ class HealthChecker:
         """Fix URL for psycopg3 compatibility"""
         if not url or "+psycopg" in url:
             return url
-        url = url.strip()  # Remove whitespace/newlines
+        url = url.strip().strip('"').strip("'")  # Remove whitespace and quotes
         parsed = urlparse(url)
         if not parsed.username or not parsed.password:
             print(f"  [ERROR] Invalid SUPABASE_DB_URL format")
+            print(f"  [DEBUG] URL: {url[:50]}...")
+            print(f"  [DEBUG] parsed.username: {parsed.username}")
             return None
         encoded_username = parsed.username.replace('.', '%2E')
         encoded_password = quote(parsed.password, safe='')

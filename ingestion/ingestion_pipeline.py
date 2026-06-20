@@ -36,7 +36,7 @@ REQUEST_TIMEOUT = 30
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 if SUPABASE_DB_URL:
     # Ensure psycopg v3 driver is used with proper URL encoding
-    SUPABASE_DB_URL = SUPABASE_DB_URL.strip()  # Remove any whitespace/newlines
+    SUPABASE_DB_URL = SUPABASE_DB_URL.strip().strip('"').strip("'")  # Remove whitespace and quotes
     if "+psycopg" not in SUPABASE_DB_URL:
         # URL-encode username and password for psycopg3 compatibility
         # IMPORTANT: Encode dot in username (postgres.project_ref format)
@@ -50,6 +50,9 @@ if SUPABASE_DB_URL:
             DB_MODE = "SUPABASE (PostgreSQL)"
         else:
             print(f"[ERROR] Invalid SUPABASE_DB_URL format: username or password missing")
+            print(f"[DEBUG] URL: {SUPABASE_DB_URL[:50]}...")
+            print(f"[DEBUG] parsed.username: {parsed.username}")
+            print(f"[DEBUG] parsed.hostname: {parsed.hostname}")
             print(f"[ERROR] Expected: postgresql://postgres.[REF]:[PASS]@host:6543/postgres")
             DB_URL = "sqlite:///ingestion/idx_stock.db"
             DB_MODE = "SQLITE (fallback - invalid DB URL)"
