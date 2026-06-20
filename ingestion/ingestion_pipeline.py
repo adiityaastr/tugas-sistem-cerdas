@@ -35,9 +35,14 @@ REQUEST_TIMEOUT = 30
 # Supabase (production) atau SQLite (dev fallback)
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 if SUPABASE_DB_URL:
-    # Ensure psycopg v3 driver is used
+    # Ensure psycopg v3 driver is used with proper URL encoding
     if "+psycopg" not in SUPABASE_DB_URL:
-        DB_URL = SUPABASE_DB_URL.replace("postgresql://", "postgresql+psycopg://")
+        # URL-encode username and password for psycopg3 compatibility
+        from urllib.parse import urlparse, quote
+        parsed = urlparse(SUPABASE_DB_URL)
+        encoded_username = quote(parsed.username, safe='')
+        encoded_password = quote(parsed.password, safe='')
+        DB_URL = f"postgresql+psycopg://{encoded_username}:{encoded_password}@{parsed.hostname}:{parsed.port}{parsed.path}"
     else:
         DB_URL = SUPABASE_DB_URL
     DB_MODE = "SUPABASE (PostgreSQL)"
