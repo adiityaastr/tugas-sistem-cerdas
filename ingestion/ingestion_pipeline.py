@@ -36,11 +36,17 @@ REQUEST_TIMEOUT = 30
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 if SUPABASE_DB_URL:
     # Ensure psycopg v3 driver is used
-    DB_URL = SUPABASE_DB_URL.replace("postgresql://", "postgresql+psycopg://") if "+psycopg" not in SUPABASE_DB_URL else SUPABASE_DB_URL
+    if "+psycopg" not in SUPABASE_DB_URL:
+        DB_URL = SUPABASE_DB_URL.replace("postgresql://", "postgresql+psycopg://")
+    else:
+        DB_URL = SUPABASE_DB_URL
     DB_MODE = "SUPABASE (PostgreSQL)"
+    print(f"[CONFIG] Database: Supabase PostgreSQL")
 else:
     DB_URL = "sqlite:///ingestion/idx_stock.db"
     DB_MODE = "SQLITE (lokal)"
+    print(f"[CONFIG] Database: SQLite (local fallback)")
+    print(f"[CONFIG] Set SUPABASE_DB_URL to use Supabase")
 
 INGEST_DATE = os.getenv("INGEST_DATE", "")
 MAX_GLOBAL_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
