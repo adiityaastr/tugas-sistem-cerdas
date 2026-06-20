@@ -77,6 +77,66 @@ PENDING ──► RUNNING ──┬──► SUCCESS     (selesai, tidak di-retr
                        └──► FAILED      (max 5x retry, lalu DEAD LETTER — butuh intervensi manual)
 ```
 
+### Hari Libur & Data Kosong
+
+**Contoh:** 16 Juni 2026 menunjukkan 0 records, bukan error.
+
+**Alasan:** 16 Juni 2026 adalah **Hari Libur Nasional (Tanggal Merah)**, sehingga:
+- IDX tutup → tidak ada trading
+- API mengembalikan 0 records (normal)
+- Pipeline mencatat status `empty` (bukan `failed`)
+- Tidak perlu retry lebih lanjut
+
+| Tanggal | Hari | Records | Status |
+|---------|------|---------|--------|
+| 2026-06-15 | Senin | 959 ✓ | Normal |
+| **2026-06-16** | **Selasa** | **0** | **Hari Libur** |
+| 2026-06-17 | Rabu | 959 ✓ | Normal |
+
+**Cek status di Supabase:**
+```sql
+SELECT date, status, record_count, error_message
+FROM ingestion_log
+WHERE status = 'empty'
+ORDER BY date DESC;
+```
+
+### OpenCode MCP Integration (Optional)
+
+Jika menggunakan [OpenCode](https://opencode.ai), database bisa diakses langsung:
+
+```bash
+# 1. Configure MCP
+# Tambahkan di ~/.config/opencode/opencode.json:
+{
+  "mcp": {
+    "supabase": {
+      "type": "remote",
+      "url": "https://mcp.supabase.com/mcp?project_ref=YOUR_REF&read_only=true&features=database",
+      "enabled": true
+    }
+  }
+}
+
+# 2. Authenticate
+opencode mcp auth supabase
+
+# 3. Verify
+opencode mcp list
+```
+
+**Query langsung dari OpenCode:**
+```sql
+-- Cek ingestion status
+SELECT date, status, record_count FROM ingestion_log ORDER BY date DESC LIMIT 5;
+
+-- Cek data availability
+SELECT COUNT(*), COUNT(DISTINCT date) FROM stock_summary;
+
+-- Cek recent failures
+SELECT * FROM ingestion_log WHERE status = 'failed' ORDER BY date DESC;
+```
+
 ### Cara Backfill Tanggal Tertentu
 
 ```
@@ -114,20 +174,24 @@ ORDER BY date DESC;
 .
 ├── .github/
 │   └── workflows/
-│       ├── ingestion.yml                # CI/CD ingestion harian + backfill
-│       └── retry_failed.yml             # Auto-retry tanggal gagal (BARU)
+│       ├── ci.yml                     # CI pipeline (PR validation)
+│       ├── ingestion.yml              # CI/CD ingestion harian + backfill
+│       └── retry_failed.yml           # Auto-retry tanggal gagal
 ├── ingestion/
-│   ├── ingestion.ipynb                  # Notebook ETL + penjelasan detail
-│   ├── ingestion_pipeline.py            # Script production (standalone)
-│   ├── idx_stock.db                     # SQLite output (local dev)
-│   └── idx_stock_summary.csv            # CSV output (local dev)
+│   ├── ingestion.ipynb                # Notebook ETL + penjelasan detail
+│   ├── ingestion_pipeline.py          # Script production (standalone)
+│   ├── idx_stock.db                   # SQLite output (local dev)
+│   └── idx_stock_summary.csv          # CSV output (local dev)
+├── scripts/
+│   ├── backfill.py                    # Manual backfill tool
+│   └── health_check.py               # Supabase health check
 ├── modeling/
-│   ├── golden_cross_modeling.ipynb      # Notebook ML classification
-│   ├── golden_cross_model.pkl           # Best model (MLP Neural Net)
-│   ├── golden_cross_results.png         # Visualisasi hasil
+│   ├── golden_cross_modeling.ipynb    # Notebook ML classification
+│   ├── golden_cross_model.pkl         # Best model (MLP Neural Net)
+│   ├── golden_cross_results.png       # Visualisasi hasil
 │   └── transaksi_harian_202605251947.csv # Dataset
 ├── .gitignore
-├── requirements.txt                     # Dependensi Python
+├── requirements.txt                   # Dependensi Python
 └── README.md
 ```
 
@@ -176,11 +240,27 @@ ORDER BY date DESC;
 1. Buka tab **Actions** di repo GitHub
 2. Klik **CD - Deploy to Supabase** → **Run workflow** → **Run workflow**
 3. Tunggu ~2 menit. Kalau sukses:
-   ```
-   [EXTRACT] BERHASIL via ScraperAPI
-   [LOAD] Tersimpan: 959 record
-   ```
+    ```
+    [EXTRACT] BERHASIL via ScraperAPI
+    [LOAD] Tersimpan: 959 record
+    ```
 4. Cek data di Supabase Dashboard → **Table Editor** → tabel `stock_summary`
+
+### Step 5 — Health Check (Opsional)
+
+Untuk verify Supabase connection dan data integrity:
+
+```bash
+python scripts/health_check.py
+```
+
+Output berhasil:
+```
+[OK] Connection successful
+[OK] All required tables exist
+[OK] Latest date: 2026-06-19, Total records: 959
+[OVERALL] HEALTHY ✓
+```
 
 ---
 
@@ -330,19 +410,140 @@ Setiap kali pipeline jalan, data dengan tanggal yang sama **dihapus dulu** lalu 
 
 ---
 
+## Manual Operations
+
+### Backfill Data Untuk Tanggal Tertentu
+
+#### Cara 1: GitHub Actions (Recommended)
+
+1. Buka repo GitHub → **Actions** tab
+2. Cari workflow **"Manual Backfill"** (atau buat jika belum ada)
+3. Klik **"Run workflow"** → dropdown
+4. Isi **Date** field dengan tanggal (YYYY-MM-DD), atau kosongkan untuk retry semua failed dates
+5. Klik **"Run workflow"**
+6. Monitor progress di job logs
+
+#### Cara 2: Local Command
+
+```powershell
+# Single date
+python scripts/backfill.py --date 2026-06-16
+
+# Date range
+python scripts/backfill.py --start 2026-06-10 --end 2026-06-20
+
+# All failed dates
+python scripts/backfill.py --all-failed
+
+# Dry-run (preview only, tidak execute)
+python scripts/backfill.py --date 2026-06-16 --dry-run
+```
+
+#### Output Contoh
+
+```
+================================================================================
+BACKFILL PREVIEW
+================================================================================
+
+Will retry 1 date(s):
+
+  2026-06-16 | status: empty | records:    0 | retries: 6 | Hari Libur (Tanggal Merah)
+
+Proceed with backfill? (y/n): y
+
+================================================================================
+EXECUTING BACKFILL
+================================================================================
+
+[1/1] Retrying 2026-06-16...
+[SUCCESS] 2026-06-16 completed
+
+================================================================================
+BACKFILL SUMMARY
+================================================================================
+Total:     1 date(s)
+Success:   1 ✓
+Failed:    0 ✗
+================================================================================
+```
+
+### Health Check
+
+Untuk verify Supabase connection dan data integrity:
+
+```powershell
+python scripts/health_check.py
+```
+
+Output:
+```
+================================================================================
+SUPABASE HEALTH CHECK
+================================================================================
+
+[CHECK] Database connection...
+  [OK] Connection successful
+
+[CHECK] Database tables...
+  [OK] All required tables exist: ['stock_summary', 'ingestion_log']
+
+[CHECK] Recent data...
+  [OK] Latest date: 2026-06-19, Total records: 959
+
+[CHECK] Ingestion log status...
+  [OK] Status breakdown: {'success': 50, 'empty': 10, 'failed': 0}
+
+[CHECK] Storage usage...
+  [OK] Estimated usage: ~11.0 MB / 500 MB
+
+================================================================================
+HEALTH CHECK SUMMARY
+================================================================================
+  ✓ PASS: Db Connection
+  ✓ PASS: Tables Exist
+  ✓ PASS: Recent Data
+  ✓ PASS: Ingestion Log
+  ✓ PASS: Storage
+
+[OVERALL] HEALTHY ✓
+================================================================================
+```
+
+---
+
 ## Troubleshooting
+
+### Pipeline Errors
 
 | Masalah | Penyebab | Solusi |
 |---------|----------|--------|
 | Workflow gagal: `HTTP 403` semua metode | IDX blokir IP datacenter | Pastikan `SCRAPER_API_KEY` sudah diset di GitHub Secrets. Cek dashboard ScraperAPI — jangan sampai kehabisan kuota |
 | Workflow gagal: `could not connect to server` | Supabase connection string salah | Cek `SUPABASE_DB_URL` di Secrets — pastikan pakai port **6543** (pooler), bukan 5432 |
 | Workflow gagal: `SCRAPER_API_KEY tidak diset` | Secret belum ditambahkan | Buka Settings → Secrets → Actions → tambahkan secret |
-| Local notebook: `unable to open database file` | Path SQLite salah | Jangan lompat cell. Jalankan **Kernel → Restart & Run All**. Notebook harus dijalankan dari folder `ingestion/` |
-| Local notebook: `NameError: name 'IDX_API_URL' is not defined` | Cell konfigurasi belum dijalankan | Jalankan cell dari atas ke bawah. Jangan skip cell 3 |
 | Data di Supabase kosong | Tabel belum dibuat | Tabel auto-create saat pipeline pertama jalan. Atau jalankan manual di notebook cell 4 |
 | Supabase "too many connections" | Connection pool habis | Pastikan pakai port 6543 (PgBouncer pooler), bukan 5432 |
 | `ingestion_log` kosong setelah pipeline | Tabel belum dibuat | Auto-create saat pipeline pertama jalan. Cek dengan `SELECT * FROM ingestion_log` |
-| Tanggal gagal tidak di-retry | `retry_count` sudah max (failed=5x, empty=3x) | Reset manual via Supabase SQL: `UPDATE ingestion_log SET retry_count=0, status='failed' WHERE date='...'` |
+| 0 records pada hari kerja | Hari libur nasional (tanggal merah) | Normal — IDX tutup pada hari libur. Status dicatat sebagai `empty`, bukan `failed` |
+
+### CI/CD Errors
+
+| Masalah | Penyebab | Solusi |
+|---------|----------|--------|
+| CI workflow: `No module named psycopg2` | Driver versi lama | Update `requirements.txt` ke `psycopg[binary]>=3.0` |
+| CI workflow: `Invalid format: must start with postgresql` | `SUPABASE_DB_URL` format salah | Pastikan format: `postgresql+psycopg://postgres.[REF]:[PASS]@aws-1-ap-southeast-2.pooler.supabase.com:6543/postgres` |
+| CI workflow: `Wrong port: use 6543` | Port 5432 terpakai | Ganti ke port **6543** (connection pooler) di Supabase dashboard |
+| CI workflow timeout | Notebook execution > 300 detik | Pastikan `ExecutePreprocessor.timeout` cukup (default 300s) |
+| Retry workflow: `exit code 1` | Pipeline gagal saat retry | Cek ingestion_log untuk error detail. Jalankan `health_check.py` |
+
+### Local Development Errors
+
+| Masalah | Penyebab | Solusi |
+|---------|----------|--------|
+| Local notebook: `unable to open database file` | Path SQLite salah | Jangan lompat cell. Jalankan **Kernel → Restart & Run All**. Notebook harus dijalankan dari folder `ingestion/` |
+| Local notebook: `NameError: name 'IDX_API_URL' is not defined` | Cell konfigurasi belum dijalankan | Jalankan cell dari atas ke bawah. Jangan skip cell 3 |
+| `pip install psycopg` gagal | Build tools belum terinstall | Windows: install Visual C++ Build Tools. Linux: `apt install libpq-dev` |
+| Tanggal gagal tidak di-retry | `retry_count` sudah max (failed=5x, empty=3x) | Gunakan backfill tool: `python scripts/backfill.py --date 2026-06-16` atau reset via SQL: `UPDATE ingestion_log SET retry_count=0 WHERE date='...'` |
 
 ---
 
@@ -357,7 +558,7 @@ Setiap kali pipeline jalan, data dengan tanggal yang sama **dihapus dulu** lalu 
 | `curl_cffi` | ≥ 0.5 | TLS fingerprint impersonation |
 | `cloudscraper` | ≥ 1.2 | Cloudflare JS solver |
 | `sqlalchemy` | ≥ 2.0 | ORM database |
-| `psycopg2-binary` | ≥ 2.9 | PostgreSQL driver |
+| `psycopg` | ≥ 3.0 | PostgreSQL driver (modern) |
 | `tenacity` | ≥ 8.0 | Retry logic dengan exponential backoff |
 | `requests` | built-in | HTTP client (ScraperAPI) |
 

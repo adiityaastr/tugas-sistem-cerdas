@@ -7,3 +7,5 @@ __pycache__/
 .env
 golden_cross_results.png
 golden_cross_results.
+.agents/
+skills-lock.json

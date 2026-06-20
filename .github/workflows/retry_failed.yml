@@ -26,4 +26,96 @@ jobs:
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
-        run: python -c "from ingestion.ingestion_pipeline import retry_failed_dates; retry_failed_dates()"
+        run: |
+          python << 'EOF'
+          import os
+          import sys
+          import traceback
+          from datetime import datetime
+          from ingestion.ingestion_pipeline import retry_failed_dates, get_failed_dates
+          
+          print("=" * 80)
+          print("RETRY FAILED INGESTION WORKFLOW")
+          print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+          print("=" * 80)
+          
+          try:
+              # Check if there are failed dates
+              failed_dates = get_failed_dates()
+              
+              if not failed_dates:
+                  print("\n[INFO] No failed dates to retry")
+                  print("[SUCCESS] Workflow completed with no action needed")
+              else:
+                  print(f"\n[INFO] Found {len(failed_dates)} date(s) to retry:")
+                  for date in failed_dates:
+                      print(f"  - {date}")
+                  
+                  print("\n[START] Running retry pipeline...")
+                  retry_failed_dates()
+                  
+                  print("\n[SUCCESS] Retry workflow completed")
+              
+          except Exception as e:
+              print(f"\n[ERROR] Retry workflow failed: {e}")
+              traceback.print_exc()
+              
+              print("\n" + "=" * 80)
+              print("TROUBLESHOOTING SUGGESTIONS:")
+              print("=" * 80)
+              print("1. Check SUPABASE_DB_URL secret is set correctly")
+              print("2. Verify connection string uses port 6543 (pooler)")
+              print("3. Check if database is accessible")
+              print("4. Review ingestion_log table for errors")
+              print("5. Check GitHub Actions logs for detailed error message")
+              print("=" * 80)
+              
+              sys.exit(1)
+          
+          print("=" * 80)
+          EOF
+
+      - name: Generate retry summary
+        if: always()
+        run: |
+          python << 'EOF'
+          from datetime import datetime
+          from ingestion.ingestion_pipeline import _get_session
+          from sqlalchemy import text
+          
+          print("\n" + "=" * 80)
+          print("RETRY SUMMARY")
+          print("=" * 80)
+          
+          try:
+              session = _get_session()
+              
+              # Get recent failed/empty entries
+              result = session.execute(text("""
+                  SELECT date, status, record_count, retry_count, error_message
+                  FROM ingestion_log
+                  WHERE status IN ('failed', 'empty')
+                  ORDER BY date DESC
+                  LIMIT 10
+              """)).fetchall()
+              
+              if result:
+                  print("\nRecent failed/empty dates:")
+                  for row in result:
+                      print(f"  {row[0]} | Status: {row[1]:6s} | Records: {row[2]:4d} | Retries: {row[3]:d} | {(row[4] or '')[:50]}")
+              
+              session.close()
+          except Exception as e:
+              print(f"[WARN] Could not generate summary: {e}")
+          
+          print("=" * 80)
+          EOF
+
+      - name: Upload workflow logs (if failed)
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: retry-workflow-logs
+          path: |
+            .github/workflows/retry_failed.yml
+          retention-days: 7
