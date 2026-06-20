@@ -27,6 +27,7 @@ import argparse
 import subprocess
 from datetime import datetime, timedelta
 from typing import List
+from urllib.parse import urlparse, quote
 from sqlalchemy import create_engine, text
 
 
@@ -39,6 +40,15 @@ class BackfillTool:
         self.gh_dispatch = args.gh_dispatch
         self.logger = self._setup_logger()
         self.engine = None
+        
+    def _fix_db_url(self, url):
+        """Fix URL for psycopg3 compatibility"""
+        if not url or "+psycopg" in url:
+            return url
+        parsed = urlparse(url)
+        encoded_username = parsed.username.replace('.', '%2E')
+        encoded_password = quote(parsed.password, safe='')
+        return f"postgresql+psycopg://{encoded_username}:{encoded_password}@{parsed.hostname}:{parsed.port}{parsed.path}"
         
     def _setup_logger(self):
         """Setup simple logger"""
@@ -63,7 +73,8 @@ class BackfillTool:
             sys.exit(1)
         
         try:
-            self.engine = create_engine(self.db_url, echo=False)
+            fixed_url = self._fix_db_url(self.db_url)
+            self.engine = create_engine(fixed_url, echo=False)
             with self.engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
             self.logger.debug("Database connection successful")

@@ -12,6 +12,7 @@ Output:
 import os
 import sys
 from datetime import datetime, timedelta
+from urllib.parse import urlparse, quote
 from sqlalchemy import create_engine, text, inspect
 
 
@@ -21,6 +22,15 @@ class HealthChecker:
         self.results = {}
         self.engine = None
         
+    def _fix_db_url(self, url):
+        """Fix URL for psycopg3 compatibility"""
+        if not url or "+psycopg" in url:
+            return url
+        parsed = urlparse(url)
+        encoded_username = parsed.username.replace('.', '%2E')
+        encoded_password = quote(parsed.password, safe='')
+        return f"postgresql+psycopg://{encoded_username}:{encoded_password}@{parsed.hostname}:{parsed.port}{parsed.path}"
+        
     def connect_db(self):
         """Test database connection"""
         print("[CHECK] Database connection...")
@@ -29,7 +39,8 @@ class HealthChecker:
                 print("  [WARN] SUPABASE_DB_URL not set - skipping Supabase checks")
                 return False
             
-            self.engine = create_engine(self.db_url, echo=False)
+            fixed_url = self._fix_db_url(self.db_url)
+            self.engine = create_engine(fixed_url, echo=False)
             with self.engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
             
