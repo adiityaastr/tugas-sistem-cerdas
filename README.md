@@ -1,57 +1,61 @@
 # Tugas Besar — Sistem Cerdas
 
-Proyek ini terdiri dari **1 use case** + **CI/CD pipeline otomatis**:
+Proyek ini terdiri dari **2 use case** + **CI/CD pipeline otomatis**:
 
 | # | Use Case | Deskripsi |
 |---|----------|-----------|
 | 1 | **Ingestion (ETL)** | Scraping data ringkasan saham IDX → database |
+| 2 | **Feature Engineering** | Membuat fitur teknikal & statistik dari data saham → tabel `stock_features` |
 
 ---
 
 ## Arsitektur Otomatisasi
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                    GITHUB ACTIONS (cloud)                        │
-│                                                                  │
-│  ┌──────────────────────────┐  ┌────────────────────────────┐   │
-│  │ ingestion.yml            │  │ retry_failed.yml           │   │
-│  │ ┌──────────────────────┐ │  │ ┌────────────────────────┐ │   │
-│  │ │ Trigger:             │ │  │ │ Trigger:               │ │   │
-│  │ │ • push main          │ │  │ │ • cron tiap 2 jam      │ │   │
-│  │ │ • cron Mon-Fri 17:30 │ │  │ │ • workflow_dispatch    │ │   │
-│  │ │ • workflow_dispatch  │ │  │ └───────────┬────────────┘ │   │
-│  │ │   input: date (opt)  │ │  │             │              │   │
-│  │ └──────────┬───────────┘ │  │             ▼              │   │
-│  │            │              │  │  Query ingestion_log      │   │
-│  │            ▼              │  │  Cari tanggal gagal       │   │
-│  │   ingestion_pipeline.py   │  │  Jalankan ulang pipeline  │   │
-│  │   Extract → Transform     │  │  per tanggal gagal        │   │
-│  │   → Load → Log            │  └───────────────────────────┘   │
-│  └──────────────────────────┘                                   │
-│                                                                  │
-│                    │                          ▲                  │
-│                    ▼                          │                  │
-│  ┌────────────────────────────────────────────┴─────────────┐   │
-│  │              SUPABASE / SQLITE                           │   │
-│  │  ┌──────────────┐  ┌──────────────┐                     │   │
-│  │  │ stock_summary │  │ingestion_log │                     │   │
-│  │  │ (data saham)  │  │(tracking     │                     │   │
-│  │  │ 29 kolom      │  │ status/retry)│                     │   │
-│  │  └──────────────┘  └──────────────┘                     │   │
-│  └──────────────────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                         GITHUB ACTIONS (cloud)                           │
+│                                                                          │
+│  ┌────────────────────┐  ┌────────────────────┐  ┌───────────────────┐  │
+│  │ ingestion.yml      │  │ retry_failed.yml   │  │ feature_engineer  │  │
+│  │ ┌────────────────┐ │  │ ┌────────────────┐ │  │ ing.yml           │  │
+│  │ │ Trigger:       │ │  │ │ Trigger:       │ │  │                   │  │
+│  │ │ • push main    │ │  │ │ • cron tiap    │ │  │ • Trigger:        │  │
+│  │ │ • cron Mon-Fri │ │  │ │   2 jam        │ │  │   workflow_run    │  │
+│  │ │   17:30        │ │  │ │ • workflow_    │ │  │   setelah inges-  │  │
+│  │ │ • workflow_    │ │  │ │   dispatch     │ │  │   tion sukses     │  │
+│  │ │   dispatch     │ │  │ └───────┬────────┘ │  │ • cron Mon-Fri    │  │
+│  │ └────────┬───────┘ │  │         │          │  │   18:30           │  │
+│  │          │          │  │         ▼          │  │ • workflow_       │  │
+│  │          ▼          │  │  Query ingestion_  │  │   dispatch        │  │
+│  │  ingestion_pipeline │  │  log → retry       │  │                   │  │
+│  │  Extract → Transform│  │  failed dates      │  │ feature_engineer  │  │
+│  │  → Load → Log       │  │                    │  │ ing.py            │  │
+│  │                     │  │                    │  │ stock_summary →   │  │
+│  │                     │  │                    │  │ stock_features    │  │
+│  └────────────────────┘  └────────────────────┘  └───────────────────┘  │
+│                                                                          │
+│                              │                     ▲                     │
+│                              ▼                     │                     │
+│  ┌─────────────────────────────────────────────────┴─────────────────┐  │
+│  │                        SUPABASE / SQLITE                          │  │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐    │  │
+│  │  │ stock_summary │  │ingestion_log │  │ stock_features       │    │  │
+│  │  │ (data saham)  │  │(tracking     │  │ (fitur hasil trans-  │    │  │
+│  │  │ 29 kolom      │  │ status/retry)│  │  formasi, 24 kolom)  │    │  │
+│  │  └──────────────┘  └──────────────┘  └──────────────────────┘    │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Dua Workflow, Dua Peran
+### Tiga Workflow, Tiga Peran
 
-| | `ingestion.yml` | `retry_failed.yml` |
-|---|---|---|
-| **Peran** | **Eksekutor** — scrape & simpan data | **Supervisor** — cek log & retry yang gagal |
-| **Trigger** | Cron 1x/hari + push + manual | Cron tiap 2 jam + manual |
-| **Yang dijalankan** | `ingestion_pipeline.py` langsung | Query `ingestion_log` → panggil `.py` per tanggal gagal |
-| **Target** | 1 tanggal (hari ini / input manual) | n tanggal (hasil query `ingestion_log`) |
-| **Tabel** | `stock_summary` | `ingestion_log` (baca) → `stock_summary` (via subprocess) |
+| | `ingestion.yml` | `retry_failed.yml` | `feature_engineering.yml` |
+|---|---|---|---|---|
+| **Peran** | **Eksekutor** — scrape & simpan data | **Supervisor** — cek log & retry yang gagal | **Transformer** — buat fitur dari data saham |
+| **Trigger** | Cron 1x/hari + push + manual | Cron tiap 2 jam + manual | workflow_run ingestion + cron + manual |
+| **Yang dijalankan** | `ingestion_pipeline.py` langsung | Query `ingestion_log` → panggil `.py` per tanggal gagal | `feature_engineering.py` |
+| **Target** | 1 tanggal (hari ini / input manual) | n tanggal (hasil query `ingestion_log`) | Semua tanggal / 1 tanggal |
+| **Tabel** | `stock_summary` | `ingestion_log` (baca) → `stock_summary` (via subprocess) | `stock_summary` → `stock_features` |
 
 ### Timeline Ilustrasi
 
@@ -182,14 +186,14 @@ ORDER BY date DESC;
 │   ├── ingestion_pipeline.py          # Script production (standalone)
 │   ├── idx_stock.db                   # SQLite output (local dev)
 │   └── idx_stock_summary.csv          # CSV output (local dev)
+├── feature_engineering/
+│   ├── feature_engineering.py         # Script production feature engineering
+│   ├── feature_engineering.ipynb      # Notebook eksplorasi fitur
+│   ├── config.py                      # Konfigurasi fitur & database
+│   └── README.md                      # Dokumentasi fitur
 ├── scripts/
 │   ├── backfill.py                    # Manual backfill tool
 │   └── health_check.py               # Supabase health check
-├── modeling/
-│   ├── golden_cross_modeling.ipynb    # Notebook ML classification
-│   ├── golden_cross_model.pkl         # Best model (MLP Neural Net)
-│   ├── golden_cross_results.png       # Visualisasi hasil
-│   └── transaksi_harian_202605251947.csv # Dataset
 ├── .gitignore
 ├── requirements.txt                   # Dependensi Python
 └── README.md
@@ -373,6 +377,49 @@ Setiap kali pipeline jalan, data dengan tanggal yang sama **dihapus dulu** lalu 
 
 ---
 
+## Use Case 2: Feature Engineering
+
+Setelah data tersimpan di `stock_summary`, modul `feature_engineering/` membuat fitur-fitur baru untuk analisis dan model ML.
+
+### Tujuan
+
+- Membuat fitur teknikal dan statistik dari data saham harian.
+- Menyediakan dataset siap pakai untuk modeling.
+- Menjaga data mentah tetap bersih dengan menyimpan fitur di tabel terpisah.
+
+### Sumber & Output
+
+| Komponen | Lokasi | Keterangan |
+|---|---|---|
+| **Input** | `stock_summary` (Supabase/SQLite) | Data mentah hasil ingestion |
+| **Output utama** | `stock_features` (Supabase) | Fitur hasil transformasi |
+| **Output backup** | `feature_engineering/stock_features_*.csv` | Backup lokal |
+
+### Kategori Fitur
+
+| Tier | Kategori | Contoh Fitur |
+|---|---|---|
+| 1 | Harian | `daily_return_pct`, `intraday_return_pct`, `spread_pct`, `foreign_net`, `market_cap_proxy` |
+| 2 | Lag-Based | `sma_5`, `sma_10`, `ema_5`, `ema_10`, `volatility_5d`, `volatility_10d` |
+| 3 | Ranking | `rank_change_pct`, `rank_volume`, `rank_value`, `rank_foreign_net` |
+
+### Cara Menjalankan
+
+```powershell
+# Semua tanggal
+python feature_engineering/feature_engineering.py --all
+
+# Tanggal tertentu
+python feature_engineering/feature_engineering.py --date 2026-06-26
+
+# Rentang tanggal + export CSV
+python feature_engineering/feature_engineering.py --start 2026-06-20 --end 2026-06-26 --export-csv
+```
+
+Dokumentasi lengkap ada di [`feature_engineering/README.md`](feature_engineering/README.md).
+
+---
+
 ## CI/CD Pipeline — Detail Teknis
 
 ### Trigger
@@ -381,8 +428,11 @@ Setiap kali pipeline jalan, data dengan tanggal yang sama **dihapus dulu** lalu 
 |---------|--------|
 | **Cron (ingestion)** | Setiap Senin—Jumat, 17:30 WIB (10:30 UTC) |
 | **Cron (retry)** | Setiap Senin—Jumat, 08:00—18:00 WIB tiap 2 jam |
+| **Cron (feature engineering)** | Setiap Senin—Jumat, 18:30 WIB (11:30 UTC) |
+| **Auto FE** | Setelah workflow `CD - Deploy to Supabase` sukses |
 | **Manual ingestion** | Tab Actions → Run workflow → isi `date` (opsional, untuk backfill) |
 | **Manual retry** | Tab Actions → Retry Failed Ingestion → Run workflow |
+| **Manual feature engineering** | Tab Actions → Feature Engineering → isi `date` (opsional) |
 
 ### Runtime
 

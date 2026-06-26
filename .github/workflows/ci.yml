@@ -72,7 +72,10 @@ jobs:
               # Test 1: Import modules
               print("\n[TEST 1] Importing modules...")
               from ingestion.ingestion_pipeline import extract_from_idx, transform, IngestionLog
+              from feature_engineering.config import DB_URL, ALL_FEATURES
+              from feature_engineering.feature_engineering import load_raw_data, build_features, StockFeatures
               print("[OK] Modules imported successfully")
+              print(f"[OK] Feature engineering configured with {len(ALL_FEATURES)} features")
               
               # Test 2: Extract (with retry)
               print("\n[TEST 2] Testing extract_from_idx()...")
@@ -99,7 +102,57 @@ jobs:
               assert df.columns.tolist().count("stock_code") == 1, "Should have stock_code column"
               print(f"[OK] Transform: {len(df)} rows × {len(df.columns)} columns")
               
-              # Test 4: Database schema
+              # Test 4: Feature engineering (mock data)
+              print("\n[TEST 4] Testing feature engineering...")
+              mock_raw = pd.DataFrame([
+                  {
+                      "date": "2026-06-26",
+                      "stock_code": "BBCA",
+                      "stock_name": "PT Bank Central Asia",
+                      "previous": 9000.0,
+                      "open_price": 9050.0,
+                      "high": 9100.0,
+                      "low": 8950.0,
+                      "close": 9080.0,
+                      "volume": 1000000.0,
+                      "value": 9080000000.0,
+                      "frequency": 5000.0,
+                      "bid": 9075.0,
+                      "offer": 9085.0,
+                      "bid_volume": 1000.0,
+                      "offer_volume": 1000.0,
+                      "foreign_buy": 500000.0,
+                      "foreign_sell": 300000.0,
+                      "tradeble_shares": 1000000000.0,
+                  },
+                  {
+                      "date": "2026-06-25",
+                      "stock_code": "BBCA",
+                      "stock_name": "PT Bank Central Asia",
+                      "previous": 8900.0,
+                      "open_price": 8950.0,
+                      "high": 9000.0,
+                      "low": 8900.0,
+                      "close": 9000.0,
+                      "volume": 900000.0,
+                      "value": 8100000000.0,
+                      "frequency": 4500.0,
+                      "bid": 8995.0,
+                      "offer": 9005.0,
+                      "bid_volume": 900.0,
+                      "offer_volume": 900.0,
+                      "foreign_buy": 400000.0,
+                      "foreign_sell": 200000.0,
+                      "tradeble_shares": 1000000000.0,
+                  }
+              ])
+              df_features = build_features(mock_raw)
+              assert "daily_return_pct" in df_features.columns, "Missing daily_return_pct feature"
+              assert "foreign_net" in df_features.columns, "Missing foreign_net feature"
+              assert len(df_features) == 2, "Feature engineering should produce 2 rows"
+              print(f"[OK] Feature engineering: {len(df_features)} rows × {len(df_features.columns)} columns")
+              
+              # Test 5: Database schema
               print("\n[TEST 4] Checking database schema...")
               from sqlalchemy import create_engine, inspect
               
@@ -108,8 +161,8 @@ jobs:
               inspector = inspect(engine)
               tables = inspector.get_table_names()
               
-              expected_tables = ["stock_summary", "ingestion_log"]
-              for table in expected_tables:
+              expected_tables = ["stock_summary", "ingestion_log", "stock_features"]
+               for table in expected_tables:
                   if table in tables or db_url.startswith("sqlite"):
                       print(f"[OK] Table '{table}' exists or will be created")
                   else:

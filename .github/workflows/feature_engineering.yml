@@ -1,0 +1,109 @@
+name: Feature Engineering
+
+on:
+  # Jalankan otomatis setelah ingestion workflow berhasil
+  workflow_run:
+    workflows: ["CD - Deploy to Supabase"]
+    types:
+      - completed
+  # Manual trigger dengan optional date
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'Tanggal target (YYYY-MM-DD) — kosongkan untuk semua tanggal'
+        required: false
+        type: string
+        default: ''
+  # Cron harian jam 18:30 WIB (11:30 UTC) sebagai fallback
+  schedule:
+    - cron: "30 11 * * 1-5"
+
+jobs:
+  feature-engineering:
+    # Hindari race condition: hanya jalan jika ingestion sukses (kalau trigger via workflow_run)
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run feature engineering pipeline
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -n "${{ github.event.inputs.date }}" ]; then
+            echo "[RUN] Generate fitur untuk tanggal: ${{ github.event.inputs.date }}"
+            python feature_engineering/feature_engineering.py --date ${{ github.event.inputs.date }} --export-csv
+          else
+            echo "[RUN] Generate fitur untuk semua tanggal"
+            python feature_engineering/feature_engineering.py --all --export-csv
+          fi
+
+      - name: Upload CSV artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stock-features-csv
+          path: feature_engineering/stock_features_*.csv
+          retention-days: 7
+
+      - name: Workflow summary
+        if: always()
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          python << 'EOF'
+          import os
+          import sys
+          from sqlalchemy import create_engine, text
+          from datetime import datetime
+
+          print("=" * 60)
+          print("FEATURE ENGINEERING SUMMARY")
+          print("=" * 60)
+
+          try:
+              db_url = os.getenv("SUPABASE_DB_URL", "")
+              if not db_url:
+                  print("[WARN] SUPABASE_DB_URL tidak tersedia, skip summary")
+                  sys.exit(0)
+
+              # Normalisasi URL untuk SQLAlchemy (sama dengan config.py)
+              from urllib.parse import urlparse, quote
+              if "+psycopg" not in db_url:
+                  parsed = urlparse(db_url)
+                  if parsed.username and parsed.password:
+                      encoded_username = parsed.username.replace('.', '%2E')
+                      encoded_password = quote(parsed.password, safe='')
+                      db_url = (
+                          f"postgresql+psycopg://{encoded_username}:{encoded_password}"
+                          f"@{parsed.hostname}:{parsed.port}{parsed.path}"
+                      )
+
+              engine = create_engine(db_url, echo=False)
+
+              with engine.connect() as conn:
+                  total = conn.execute(text("SELECT COUNT(*) FROM stock_features")).scalar()
+                  dates = conn.execute(text("SELECT COUNT(DISTINCT date) FROM stock_features")).scalar()
+                  stocks = conn.execute(text("SELECT COUNT(DISTINCT stock_code) FROM stock_features")).scalar()
+
+              print(f"  Total rows    : {total:,}")
+              print(f"  Unique dates  : {dates:,}")
+              print(f"  Unique stocks : {stocks:,}")
+              print(f"  Generated at  : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+          except Exception as e:
+              print(f"[WARN] Could not generate summary: {e}")
+
+          print("=" * 60)
+          EOF
